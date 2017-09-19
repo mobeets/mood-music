@@ -1,0 +1,16 @@
+- https://neokt.github.io/projects/audio-music-mood-classification/
+	- "The two 5-class random forest models individually did much better than the 25-class random forest model; my arousal model had .57 precision and my positivity model had .48 precision. However, the combined result was .35 precision in mood prediction which wasn’t an improvement over the 25-class model."
+
+Filters:
+- s['end_time'] ≤ 500 # not too long
+- s['end_time'] > 0 # not empty?
+- len(s['tempos']) == 1 # no tempo changes
+- len(s['time_signature_changes']) == 1 # no time signature changes
+- [c.numerator == 4 and c.denominator == 4 for s in statistics for c in s['time_signature_changes']] # only 4/4
+- len(s['key_numbers']) == 1 # no key changes
+- we have mood for this song (using gracenote api)
+
+Preprocessing:
+- remove drums: [i.program for i in pm.instruments if not i.is_drum]
+- convert to Cmaj/Amin
+
