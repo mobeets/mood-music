@@ -1,5 +1,6 @@
 import numpy as np
 import pretty_midi
+from utils.detect_key import analyze_key
 
 def compute_statistics(midi_file, identifier=None):
     """
@@ -29,7 +30,7 @@ def compute_statistics(midi_file, identifier=None):
             'bpms': list(pm.get_tempo_changes()[1]),
             'time_signature_changes': [(x.numerator, x.denominator, x.time) for x in pm.time_signature_changes],
             'end_time': pm.get_end_time()}
-    # Silently ignore exceptions for a clean presentation (sorry Python!)
+    # ignore exceptions for a clean presentation
     except Exception as e:
         print str(e)
 

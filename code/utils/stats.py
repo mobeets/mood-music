@@ -4,11 +4,11 @@ import joblib
 import fnmatch
 from utils.midi_utils import compute_statistics, midifile_roundtrip
 
-def run_all_midifiles(midifiles, inner_fcn=None, do_parallel=True):
+def run_all_midifiles(midifiles, inner_fcn=None, do_parallel=True, njobs=5):
     if inner_fcn is None:
         raise Exception("Error: You must specify inner_fcn.")
     if do_parallel:
-        stats = joblib.Parallel(n_jobs=10, verbose=0)(
+        stats = joblib.Parallel(n_jobs=njobs, verbose=0)(
             joblib.delayed(inner_fcn)(midi_file, key)
             for key, midi_file in midifiles.iteritems())
     else:
@@ -39,25 +39,30 @@ def get_all_midifiles(mididir, infofile, maxn=None):
 def save_stats(outfile, stats):
     json.dump(stats, open(outfile, 'w'))
 
-def make_stats(midifiles):
+def make_stats(midifiles, outfile):
     print 'Found {} midifiles to process.'.format(len(midifiles))
     
     stats = run_all_midifiles(midifiles, inner_fcn=compute_statistics)
-    print 'Created {} stats.'.format(len(stats))
-    outfile = os.path.join('data', 'stats.json')
+    print 'Created {} stats.'.format(len(stats)) 
     save_stats(outfile, stats)
+    return stats
 
-def make_midis(midifiles):
+def make_midis(midifiles, outdir):
     print 'Found {} midifiles to process.'.format(len(midifiles))
     
-    outf = lambda y: os.path.join('data', 'samples', y + '.mid')
+    outf = lambda y: os.path.join(outdir, y + '.mid')
     pairs = dict((outf(key), midifile) for key, midifile in midifiles.iteritems())
     stats = run_all_midifiles(pairs, inner_fcn=midifile_roundtrip)
 
 if __name__ == '__main__':
     mididir = os.path.join('data', 'lmd_matched')
-    infofile = os.path.join('data', 'md5_to_info_all-v8.json')    
+    infofile = os.path.join('data', 'lmd_gracenote_metadata.json')    
     midifiles = get_all_midifiles(mididir, infofile, maxn=None)
 
-    make_stats(midifiles)
-    # make_midis(midifiles)
+    # keys = midifiles.keys()[25000:]
+    # midifiles = dict((nm,midifiles[nm]) for nm in keys)
+    # outfile = os.path.join('data', 'stats-30000.json')
+    # make_stats(midifiles, outfile)
+
+    # outdir = os.path.join('data', 'samples')
+    # make_midis(midifiles, outdir)
