@@ -8,10 +8,8 @@ from utils import pygn
 clientID = '1275500366-A7B20DB53F5F80C496FF304B17C3F748'
 userID = pygn.register(clientID)
 
-def get_artist_and_songname(filename):
-    artist = 'The Beatles'
-    songname = filename.replace('.mid', '').split('__')[1].replace('_', ' ').replace('---', '')
-    return artist, songname
+def get_songname(filename):
+    return filename.replace('.mid', '').split('__')[1].replace('_', ' ').replace('---', '')
 
 def clean(txt):
     return unidecode(txt)
@@ -33,9 +31,10 @@ def main(outfile):
     info = {}
     i = 0
     bar = Bar('Processing', max=226, suffix='%(index)d completed')
+    artist = 'The Beatles'
     for root, dirs, files in os.walk('data/beatles'):
         for infile in fnmatch.filter(files, '*.mid'):
-            artist, songname = get_artist_and_songname(infile)
+            songname = get_songname(infile)
             meta = find_song(artist, songname)
             if meta is not None:
                 bar.next()

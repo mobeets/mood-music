@@ -34,23 +34,34 @@ def compute_statistics(midi_file, identifier=None):
     except Exception as e:
         print str(e)
 
-def get_clean_pianoroll(midi_file, key=None):
+def pm_change_key(pm, offset):
+    for instrument in pm.instruments:
+        if not instrument.is_drum:
+            for note in instrument.notes:
+                note.pitch += offset
+    return pm
+
+def get_clean_pianoroll(midi_file, offset=0, bpm_scale=1):
     try:
         pm = pretty_midi.PrettyMIDI(midi_file)
         # just keep the first part up to the first tempo change
+        if offset != 0:
+            pm = pm_change_key(pm, offset)
         bpm = pm.get_tempo_changes()[1][0]
+        bpm = bpm*bpm_scale
         start_times = list(pm.get_tempo_changes()[0])
         if len(start_times) > 1:
             end_time = start_times[1]
         else:
             end_time = pm.get_end_time()
         ntimes = len(np.arange(0, end_time, 1./bpm))
-        return pm.get_piano_roll(fs=bpm)[:,:ntimes]
+        roll = pm.get_piano_roll(fs=bpm)[:,:ntimes]
+        roll[roll > 127.] = 127.
+        return roll
     except Exception as e:
-        print 'ERROR...'
-        print str(e)
+        print 'ERROR: {}'.format(e)
 
-def piano_roll_to_pretty_midi(piano_roll, fs=100, program=0):
+def roll_to_pm(piano_roll, fs=100, program=0):
     '''Convert a Piano Roll array into a PrettyMidi object
      with a single instrument.
     Parameters
@@ -114,4 +125,4 @@ def midifile_roundtrip(midi_file, outfile, do_clean=True):
     if sample is None:
         return
     pm.write(outfile.replace('.mid', '_og.mid'))
-    piano_roll_to_pretty_midi(sample, fs=bpm).write(outfile)
+    roll_to_pm(sample, fs=bpm).write(outfile)
