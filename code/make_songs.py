@@ -24,26 +24,31 @@ def pianoroll_to_song(roll, trim_flank_silence=False):
     	# trim silence at beginning or end
     	if len(song) == 0 or len([x for x in song if len(x)]) == 0:
     		return []
-		inds = [i for i,x in enumerate(song) if len(x)]
+		inds = [i for i,x in enumerate(song) if len(x) > 0]
 		song = song[inds[0]:(inds[-1]+1)]
 	return song
 
-def song_to_pianoroll(song, offset=0):
+def song_to_pianoroll(song, offset=0, trim_flank_silence=False):
     """
     song = [(60, 72, 79, 88), (72, 79, 88), (67, 70, 76, 84), ...]
     """
     rolls = []
+    started = not trim_flank_silence
     for notes in song:
+    	if not started and len(notes) == 0:
+    		continue
+    	else:
+    		started = True
         roll = np.zeros(128)
         roll[[n-offset for n in notes]] = 1.
         rolls.append(roll)
     return np.vstack(rolls)
 
-def pianoroll_history(roll, seq_length):
+def pianoroll_history(roll, seq_length, stride_length=1):
 	if len(roll) < seq_length:
 		return []
 	rs = []
-	for i in np.arange(len(roll)-seq_length):
+	for i in np.arange(0, len(roll)-seq_length+1, stride_length):
 		rs.append(roll[i:i+seq_length])
 	rs = np.dstack(rs)
 	return np.transpose(rs, (2,0,1))
@@ -80,7 +85,7 @@ def make_song(filename, song, mididir, do_key_shift=True, division=1):
 		'mood_energy': mood_energy, 'mood_valence': mood_valence,
 		'playcount': playcount}
 
-def make_all_songs(metafile, mididir, songfile, do_key_shift=True, division=2, do_parallel=True):
+def make_all_songs(metafile, mididir, songfile, do_key_shift=True, division=4, do_parallel=True):
 	info = json.load(open(metafile))
 	# info = dict((x,info[x]) for x in info.keys()[:20])
 	# info = dict((x,info[x]) for x in info.keys() if x == u'11B-1__Within_You_Without_You.mid')
@@ -105,5 +110,5 @@ def make_all_songs(metafile, mididir, songfile, do_key_shift=True, division=2, d
 if __name__ == '__main__':
 	mididir = '../data/beatles/raw'
 	metafile = '../data/beatles/meta/meta.json'
-	songfile = '../data/beatles/songs-custom.pickle'
+	songfile = '../data/beatles/songs-sixteenths.pickle'
 	make_all_songs(metafile, mididir, songfile)

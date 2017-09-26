@@ -20,3 +20,4 @@ def save_model_in_pieces(model, args):
     # save model args
     outfile = os.path.join(args.model_dir, args.run_name + '.json')
     json.dump(vars(args), open(outfile, 'w'))
+    return outfile.replace('.json', '.h5')
