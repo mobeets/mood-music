@@ -41,14 +41,55 @@ def pm_change_key(pm, offset):
                 note.pitch += offset
     return pm
 
-def get_clean_pianoroll(midi_file, offset=0, bpm_scale=1):
+def pmtoroll(pm, division=1, offset=0, enforce_unique_tempo=True):
+    # find start and end (in seconds)
+    start = min([min(i.notes, key=lambda x: x.start).start for i in pm.instruments])
+    end = max([max(i.notes, key=lambda x: x.end).end for i in pm.instruments])
+
+    # find tempo to determine temporal bin size
+    tempo_change_times, tempi = pm.get_tempo_changes()
+    delta = (60/tempi[0])/float(division)
+    nbins = int(np.ceil((end-start)/delta))+1
+    if enforce_unique_tempo and len(tempo_change_times) > 1:
+        true_end = tempo_change_times[1]
+        nbins = int(np.round((true_end-start)/delta))
+        if nbins < 0:
+            return None
+
+    R = np.zeros([128, nbins])
+    for inst in pm.instruments:
+        for note in inst.notes:
+            cstart = int(np.round((note.start-start)/delta))
+            cend = int(np.round((note.end-start)/delta))
+            cend = max(cend, cstart+1)
+            if cend >= nbins:
+                continue
+            note.pitch += offset
+            if note.pitch > R.shape[0]:
+                print "Error, offset {} too large.".format(offset)
+            pvel = R[note.pitch, cstart:cend]
+            cvel = note.velocity*np.ones(cend-cstart)
+            vel = np.vstack([pvel, cvel]).max(axis=0)
+            R[note.pitch, cstart:cend] = vel
+    # don't allow velocities to be above maximum
+    R[R > 127.] = 127.
+    return R
+
+def get_clean_pianoroll(midi_file, offset=0, division=1):
+    """
+    division = number of notes to divide a quarter note
+        - e.g., 1 -> quarter notes, 2 -> eighth notes, ...
+
+    todo: need to discretize time before piano_roll hits it...
+    try pm.adjust_times(original_times, new_times)
+    """
     try:
         pm = pretty_midi.PrettyMIDI(midi_file)
         # just keep the first part up to the first tempo change
         if offset != 0:
             pm = pm_change_key(pm, offset)
         bpm = pm.get_tempo_changes()[1][0]
-        bpm = bpm*bpm_scale
+        bpm = bpm*(division/60.)
         start_times = list(pm.get_tempo_changes()[0])
         if len(start_times) > 1:
             end_time = start_times[1]
