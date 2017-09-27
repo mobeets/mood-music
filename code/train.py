@@ -1,9 +1,11 @@
 import cPickle
 import argparse
 import numpy as np
-from keras.layers import Input, Dense, Embedding, Dropout, Conv1D, MaxPooling1D, LSTM, Flatten
+from keras.layers import Input, Dense, Embedding, Dropout, Conv1D, MaxPooling1D, LSTM, Flatten, Activation
+from keras.layers.normalization import BatchNormalization
 from keras.models import Model
 from keras.utils import to_categorical
+from utils.weightnorm import data_based_init
 from utils.model_utils import get_callbacks, save_model_in_pieces
 from make_songs import song_to_pianoroll, pianoroll_history
 
@@ -38,11 +40,36 @@ def load_data(args, train_prop=0.9):
     D = [(x,y) for x,y in D if len(x) and y is not None]
     if args.n_per_song != 0:
         min_per_song = np.median([len(x) for x,y in D])
-        print "Median samples per song is {}.".format(min_per_song)
+        print "Median parts per song is {}.".format(min_per_song)
         # min_per_song = args.n_per_song
         args.n_per_song = int(min_per_song)
-        print "Using {} samples per song.".format(args.n_per_song)
+        print "Sampling {} parts per song.".format(args.n_per_song)
         D = sample_random_rows(D, args.n_per_song)
+
+    # jitter song parts +/- up to a major third (4 semitones)
+    if args.do_jitter:
+        print "Making shifted copies of every part..."
+        # offsets = np.random.randint(-4, 5, len(D))
+        E = []
+        for (x,y) in D:
+            E.append((np.roll(x, -4, axis=-1),y))
+            E.append((np.roll(x, -2, axis=-1),y))
+            E.append((np.roll(x, -1, axis=-1),y))
+            E.append((np.roll(x, 1, axis=-1),y))
+            E.append((np.roll(x, 2, axis=-1),y))
+            E.append((np.roll(x, 4, axis=-1),y))
+        D = D + E
+    else:
+        offsets = np.zeros(len(D))
+    # D = [(np.roll(x, offset, axis=-1),y) for (x,y),offset in zip(D, offsets)]
+
+    # reduce dimensionality
+    # print "Reducing dimensionality..."
+    # dmn = min([np.where(x.sum(axis=0).sum(axis=0))[0].min() for x,y in D])
+    # dmx = max([np.where(x.sum(axis=0).sum(axis=0))[0].max() for x,y in D])
+    # args.dimrange = (dmn, dmx) # save range
+    # print "Reduced dimensionality from {} to {}".format(D[0][0].shape[-1], dmx-dmn+1)
+    # D = [(x[:,:,dmn:(dmx+1)],y) for x,y in D]
 
     if not args.do_classify:
         # normalize y to be in 0..1
@@ -53,19 +80,20 @@ def load_data(args, train_prop=0.9):
         yrng = None
 
     # split by song into train/validation/test
+    print "Splitting into train and test..."
     inds = np.random.permutation(len(D))
     nd = int(len(D)*train_prop)
     tr_inds = inds[:nd]
-    va_inds = inds[nd:]
-    # te_inds = inds[nd::2]
-    # va_inds = inds[nd+1::2]
+    # va_inds = inds[nd:]
+    te_inds = inds[nd::2]
+    va_inds = inds[nd+1::2]
     Xtr, ytr, Itr = get_data_block(D, tr_inds, yrng,
         args.batch_size)
     Xva, yva, Iva = get_data_block(D, va_inds, yrng,
         args.batch_size)
-    # Xte, yte, Ite = get_data_block(D, te_inds, yrng,
-        # args.batch_size)
-    Xte, yte, Ite = [], [], []
+    Xte, yte, Ite = get_data_block(D, te_inds, yrng,
+        args.batch_size)
+    # Xte, yte, Ite = [], [], []
     return AttrDict({'Xtr': Xtr, 'ytr': ytr,
         'Xva': Xva, 'yva': yva, 'Xte': Xte, 'yte': yte,
         'Itr': Itr, 'Ite': Ite, 'Iva': Iva})
@@ -80,13 +108,21 @@ def get_model(args):
         args.seq_length, args.original_dim), name='X')
     # X.shape == [100, S, 128]
 
-    P1 = Dense(args.original_dim, activation='relu')(X)
-    P2 = Dense(2*hidden_dim, activation='relu')(P1)
-    z = Dense(hidden_dim, activation='relu')(P2)
-    zf = Flatten()(z)
+    P1 = Dense(args.original_dim)(X)
+    P1b = BatchNormalization()(P1)
+    P1a = Activation('relu')(P1b)
+    P1d = Dropout(args.dropout)(P1a)
+    zf = Flatten()(P1d)
+
+    # z = Dense(hidden_dim)(P1d)
+    # zb = BatchNormalization()(z)
+    # za = Activation('relu')(zb)
+    # zd = Dropout(args.dropout)(za)
+    # zf = Flatten()(zd)
+
     if args.do_classify:
         y = Dense(args.n_classes,
-                activation='softmax', name='y')(zf)
+            activation='softmax', name='y')(zf)
     else:
         y = Dense(1, activation='sigmoid', name='y')(zf)
     model = Model(X, y)
@@ -149,7 +185,11 @@ def plot(D, model):
 def train(args):
     """
     - get convolutions working over space
-        - then augment data by adding +/- a major third in key
+    - then augment data by adding +/- a major third in key
+    - add batch normalization: https://keras.io/layers/normalization/
+
+    - prevent overfitting...maybe I just need more songs and not just shifted copies of things already in training data.
+    - try on a bigger midi song data set
     """
     D = load_data(args)
     if args.do_classify:
@@ -164,6 +204,7 @@ def train(args):
     args.original_dim = D.Xtr.shape[-1]
     model = get_model(args)
     model_file = save_model_in_pieces(model, args)
+    data_based_init(model, D.Xtr[:100])
     history = model.fit(D.Xtr, D.ytr,
         shuffle=True,
         epochs=args.num_epochs,
@@ -188,12 +229,16 @@ if __name__ == '__main__':
         help='stride length')
     parser.add_argument('--n_per_song', type=int, default=1,
         help='samples per song')
+    parser.add_argument('--dropout', type=float, default=0.0,
+        help='dropout (proportion)')
     parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--yname', type=str,
         choices=['playcount', 'mood_valence', 'mood_energy'],
         default='playcount', help='what to fit')
     parser.add_argument("--do_classify", action="store_true",
                 help="treat y as category")
+    parser.add_argument("--do_jitter", action="store_true",
+                help="add jitter to piano rolls")
     parser.add_argument('--optimizer', type=str,
         default='adam', help='optimizer name')
     parser.add_argument('--train_file', type=str,
