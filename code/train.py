@@ -1,13 +1,11 @@
 import cPickle
 import argparse
 import numpy as np
-from keras.layers import Input, Dense, Embedding, Dropout, Conv1D, MaxPooling1D, LSTM, Flatten, Activation
-from keras.layers.normalization import BatchNormalization
-from keras.models import Model
 from keras.utils import to_categorical
 from utils.weightnorm import data_based_init
 from utils.model_utils import get_callbacks, save_model_in_pieces
 from make_songs import song_to_pianoroll, pianoroll_history
+from model import get_model
 
 def sample_random_rows(D, nsamples):
     """
@@ -39,10 +37,10 @@ def load_data(args, train_prop=0.9):
     D = [(pianoroll_history(song_to_pianoroll(x['song'], trim_flank_silence=True), args.seq_length, args.stride_length), x[args.yname]) for x in d]
     D = [(x,y) for x,y in D if len(x) and y is not None]
     if args.n_per_song != 0:
-        min_per_song = np.median([len(x) for x,y in D])
+        min_per_song = int(np.median([len(x) for x,y in D]))
         print "Median parts per song is {}.".format(min_per_song)
         # min_per_song = args.n_per_song
-        args.n_per_song = int(min_per_song)
+        args.n_per_song = min_per_song
         print "Sampling {} parts per song.".format(args.n_per_song)
         D = sample_random_rows(D, args.n_per_song)
 
@@ -61,15 +59,15 @@ def load_data(args, train_prop=0.9):
         D = D + E
     else:
         offsets = np.zeros(len(D))
-    # D = [(np.roll(x, offset, axis=-1),y) for (x,y),offset in zip(D, offsets)]
 
     # reduce dimensionality
-    # print "Reducing dimensionality..."
-    # dmn = min([np.where(x.sum(axis=0).sum(axis=0))[0].min() for x,y in D])
-    # dmx = max([np.where(x.sum(axis=0).sum(axis=0))[0].max() for x,y in D])
-    # args.dimrange = (dmn, dmx) # save range
-    # print "Reduced dimensionality from {} to {}".format(D[0][0].shape[-1], dmx-dmn+1)
-    # D = [(x[:,:,dmn:(dmx+1)],y) for x,y in D]
+    if args.dim_reduce:
+        print "Reducing dimensionality..."
+        dmn = min([np.where(x.sum(axis=0).sum(axis=0))[0].min() for x,y in D])
+        dmx = max([np.where(x.sum(axis=0).sum(axis=0))[0].max() for x,y in D])
+        args.dimrange = (dmn, dmx) # save range
+        print "Reduced dimensionality from {} to {}".format(D[0][0].shape[-1], dmx-dmn+1)
+        D = [(x[:,:,dmn:(dmx+1)],y) for x,y in D]
 
     if not args.do_classify:
         # normalize y to be in 0..1
@@ -81,6 +79,22 @@ def load_data(args, train_prop=0.9):
 
     # split by song into train/validation/test
     print "Splitting into train and test..."
+    if args.cv_parts:
+        X, y, I = get_data_block(D, np.arange(len(D)), yrng)
+        inds = np.random.permutation(len(X))
+        nd = int(len(X)*train_prop)
+        nd = (nd / args.batch_size)*args.batch_size
+        Itr = inds[:nd]
+        Ite = inds[nd::2]
+        Iva = inds[nd+1::2]
+        Ite = Ite[:(len(Ite)/args.batch_size)*args.batch_size]
+        Iva = Iva[:(len(Iva)/args.batch_size)*args.batch_size]
+        Xtr, ytr = X[Itr], y[Itr]
+        Xte, yte = X[Ite], y[Ite]
+        Xva, yva = X[Iva], y[Iva]
+        return AttrDict({'Xtr': Xtr, 'ytr': ytr,
+            'Xva': Xva, 'yva': yva, 'Xte': Xte, 'yte': yte,
+            'Itr': Itr, 'Ite': Ite, 'Iva': Iva})
     inds = np.random.permutation(len(D))
     nd = int(len(D)*train_prop)
     tr_inds = inds[:nd]
@@ -97,72 +111,6 @@ def load_data(args, train_prop=0.9):
     return AttrDict({'Xtr': Xtr, 'ytr': ytr,
         'Xva': Xva, 'yva': yva, 'Xte': Xte, 'yte': yte,
         'Itr': Itr, 'Ite': Ite, 'Iva': Iva})
-
-def get_model(args):
-    n_filters = 16
-    kernel_size = 2
-    pool_size = 2
-    hidden_dim = 8
-
-    X = Input(batch_shape=(args.batch_size,
-        args.seq_length, args.original_dim), name='X')
-    # X.shape == [100, S, 128]
-
-    P1 = Dense(args.original_dim)(X)
-    P1b = BatchNormalization()(P1)
-    P1a = Activation('relu')(P1b)
-    P1d = Dropout(args.dropout)(P1a)
-    zf = Flatten()(P1d)
-
-    # z = Dense(hidden_dim)(P1d)
-    # zb = BatchNormalization()(z)
-    # za = Activation('relu')(zb)
-    # zd = Dropout(args.dropout)(za)
-    # zf = Flatten()(zd)
-
-    if args.do_classify:
-        y = Dense(args.n_classes,
-            activation='softmax', name='y')(zf)
-    else:
-        y = Dense(1, activation='sigmoid', name='y')(zf)
-    model = Model(X, y)
-    if args.do_classify:
-        model.compile(optimizer=args.optimizer,
-            loss='categorical_crossentropy',
-            metrics=['accuracy'])
-    else:
-        model.compile(optimizer=args.optimizer,
-            loss='binary_crossentropy')
-    return model
-
-    C = Conv1D(n_filters, kernel_size,
-        input_shape=(args.seq_length, args.original_dim),
-        padding='valid', activation='relu', strides=1)(X)
-    # C.shape == [100, ~S, n_filters]
-
-    P = MaxPooling1D(pool_size=pool_size)(C)
-    # P.shape == [100, ~S/pool_size, n_filters]
-
-    C2 = Conv1D(n_filters/2, kernel_size,
-        padding='valid', activation='relu', strides=1)(P)
-    P2 = MaxPooling1D(pool_size=pool_size)(C2)
-    z = Dense(hidden_dim, activation='relu')(P2)
-    zf = Flatten()(z)
-    if args.do_classify:
-        y = Dense(args.n_classes,
-                activation='softmax', name='y')(zf)
-    else:
-        y = Dense(1, activation='sigmoid', name='y')(zf)
-
-    model = Model(X, y)
-    if args.do_classify:
-        model.compile(optimizer=args.optimizer,
-            loss='categorical_crossentropy',
-            metrics=['accuracy'])
-    else:
-        model.compile(optimizer=args.optimizer,
-            loss='binary_crossentropy')
-    return model
 
 def plot(D, model):
     import matplotlib.pyplot as plt
@@ -236,9 +184,13 @@ if __name__ == '__main__':
         choices=['playcount', 'mood_valence', 'mood_energy'],
         default='playcount', help='what to fit')
     parser.add_argument("--do_classify", action="store_true",
-                help="treat y as category")
+        help="treat y as category")
     parser.add_argument("--do_jitter", action="store_true",
-                help="add jitter to piano rolls")
+        help="add jitter to piano rolls")
+    parser.add_argument("--dim_reduce", action="store_true",
+        help="eliminate unused midi dimensions")
+    parser.add_argument("--cv_parts", action="store_true",
+        help="cross-validation at part-level, not song-level")
     parser.add_argument('--optimizer', type=str,
         default='adam', help='optimizer name')
     parser.add_argument('--train_file', type=str,
