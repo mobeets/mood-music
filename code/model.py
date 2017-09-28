@@ -1,12 +1,34 @@
 import json
 import numpy as np
-from keras.layers import Input, Dense, Embedding, Dropout, Conv1D, MaxPooling1D, Flatten, Activation
+from keras.layers import Input, Dense, Embedding, Dropout, Conv1D, MaxPooling1D, Flatten, Activation, LSTM
 from keras.layers.normalization import BatchNormalization
 from keras.models import Model
 
-class AttrDict(dict):
-    def __getattr__(self, name):
-        return self[name]
+def get_embed_model(args, do_opt=False):
+    args.embedding_dim = 512
+    args.hidden_dim = 128
+
+    X = Input(shape=(args.seq_length,), name='X')
+    Z = Embedding(output_dim=args.embedding_dim,
+            input_dim=args.num_words,
+            input_length=args.seq_length)(X)
+    zf0 = Dense(args.hidden_dim, activation='relu')(Z)
+    zf = Flatten()(zf0)
+
+    if args.do_classify:
+        y = Dense(args.n_classes,
+            activation='softmax', name='y')(zf)
+    else:
+        y = Dense(1, activation='sigmoid', name='y')(zf)
+    model = Model(X, y)
+    if args.do_classify:
+        model.compile(optimizer=args.optimizer,
+            loss='categorical_crossentropy',
+            metrics=['accuracy'])
+    else:
+        model.compile(optimizer=args.optimizer,
+            loss='binary_crossentropy')
+    return model
 
 def get_model(args, do_opt=False):
     n_filters = 16
@@ -85,11 +107,18 @@ def get_model(args, do_opt=False):
             loss='binary_crossentropy')
     return model
 
+class AttrDict(dict):
+    def __getattr__(self, name):
+        return self[name]
+
 def load_model(model_file, do_opt=False):
     margs = json.load(open(model_file.replace('.h5', '.json')))
     margs = AttrDict(margs)
     margs.batch_size = 1
     margs.dropout = 0.0
-    model = get_model(margs, do_opt=do_opt)
+    if margs.do_embed:
+        model = get_embed_model(margs, do_opt=do_opt)
+    else:
+        model = get_model(margs, do_opt=do_opt)
     model.load_weights(model_file)
     return model, margs
